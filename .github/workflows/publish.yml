@@ -1,0 +1,33 @@
+name: dalsauto-publish
+on:
+  schedule:
+    - cron: "3,18,33,48 * * * *"   # 15분마다(정각대는 GitHub가 자주 건너뜀). 공개 저장소라 실행 분량 무제한
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: dalsauto-publish
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4 (커밋 고정: 태그가 바뀌어도 코드가 바뀌지 않게)
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+      - name: 암호화 라이브러리
+        run: pip install --quiet cryptography==50.0.2
+      - name: 발행·측정
+        env:
+          DALSAUTO_THREADS_TOKEN: ${{ secrets.DALSAUTO_THREADS_TOKEN }}
+        run: python publish.py
+      - name: 결과 저장
+        run: |
+          git config user.name "dalsauto-bot"
+          git config user.email "dalsauto-bot@users.noreply.github.com"
+          git add state.json
+          git diff --cached --quiet || git commit -m "state $(date -u +%Y-%m-%dT%H:%MZ)"
+          git pull --rebase --autostash || true
+          git push || true
