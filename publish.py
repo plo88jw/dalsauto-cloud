@@ -141,6 +141,24 @@ def hours(a, b):
     return (b - datetime.fromisoformat(a)).total_seconds() / 3600
 
 
+def find_recent_same(uid, body, now):
+    """같은 본문이 최근 12시간 안에 이미 올라갔으면 그 글을 돌려준다(실행이 겹치거나 상태 저장이 유실돼도 중복 발행 방지).
+    확인 자체가 실패하면 None — 평소대로 발행한다."""
+    try:
+        data = call("GET", f"{uid}/threads", fields="id,permalink,text,timestamp", limit=10).get("data", [])
+    except ApiError:
+        return None
+    want = " ".join(body.split())
+    for x in data:
+        try:
+            at = datetime.fromisoformat(x["timestamp"].replace("+0000", "+00:00"))
+        except (KeyError, ValueError):
+            continue
+        if " ".join((x.get("text") or "").split()) == want and now - at < timedelta(hours=12):
+            return {**x, "at": at}
+    return None
+
+
 def run(now=None):
     now = now or datetime.now(UTC)
     queue = load_json(QUEUE, {"posts": [], "rules": {}})
@@ -166,19 +184,25 @@ def run(now=None):
     if due and len(today) < DAILY_CAP and (not last or now - last >= timedelta(minutes=MIN_GAP_MIN)):
         p = due[0]
         st = state["posts"].setdefault(str(p["id"]), {})
-        try:
-            threads = list(p.get("threads") or [])
-            if p.get("link_mode") == "immediate" and p.get("link_thread"):
-                threads.append(p["link_thread"])
-            root, link, replies = publish_chain(uid, p["body"], p.get("images") or [], threads)
-            st.update(status="published", published_at=iso(now), threads_id=root, permalink=link, reply_ids=replies)
-            log.append(f"발행 #{p['id']} {link}")
-        except ApiError as e:
-            if st.get("tries", 0) >= 1:
-                st.update(status="failed", error=f"재시도 후 실패: {e}")
-            else:
-                st.update(tries=1, retry_at=iso(now + timedelta(minutes=RETRY_MIN)), error=f"재시도 예정: {e}")
-            log.append(f"실패 #{p['id']}: {e}")
+        dup = find_recent_same(uid, p["body"], now)
+        if dup:  # 이미 올라간 글: 다시 올리지 않고 기록만 한다
+            st.update(status="published", published_at=iso(dup["at"]), threads_id=dup["id"],
+                      permalink=dup.get("permalink"), reply_ids=[])
+            log.append(f"이미 올라간 글 감지 #{p['id']} {dup.get('permalink')} — 기록만")
+        else:
+            try:
+                threads = list(p.get("threads") or [])
+                if p.get("link_mode") == "immediate" and p.get("link_thread"):
+                    threads.append(p["link_thread"])
+                root, link, replies = publish_chain(uid, p["body"], p.get("images") or [], threads)
+                st.update(status="published", published_at=iso(now), threads_id=root, permalink=link, reply_ids=replies)
+                log.append(f"발행 #{p['id']} {link}")
+            except ApiError as e:
+                if st.get("tries", 0) >= 1:
+                    st.update(status="failed", error=f"재시도 후 실패: {e}")
+                else:
+                    st.update(tries=1, retry_at=iso(now + timedelta(minutes=RETRY_MIN)), error=f"재시도 예정: {e}")
+                log.append(f"실패 #{p['id']}: {e}")
 
     # 2) 조회수 측정 + 터진 글 링크 타래
     qmap = {str(p["id"]): p for p in queue["posts"]}
