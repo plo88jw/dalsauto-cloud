@@ -14,6 +14,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4 (커밋 고정: 태그가 바뀌어도 코드가 바뀌지 않게)
+        with:
+          ref: main  # 대기하던 실행이 트리거 시점의 낡은 상태 파일을 쓰지 않게 항상 최신 main
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
