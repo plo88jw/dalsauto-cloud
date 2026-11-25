@@ -84,14 +84,18 @@ def save_json(path, obj):
                           encoding="utf-8")
 
 
-def wait_ready(cid):
-    for _ in range(40):
+def is_video_url(u):
+    return str(u).split("?")[0].lower().endswith((".mp4", ".mov"))
+
+
+def wait_ready(cid, tries=40, delay=2):
+    for _ in range(tries):
         d = call("GET", cid, fields="status,error_message")
         if d.get("status") == "FINISHED":
             return
         if d.get("status") in ("ERROR", "EXPIRED"):
             raise ApiError(f"컨테이너 {d.get('status')}: {d.get('error_message', '')}")
-        time.sleep(2)
+        time.sleep(delay)
     raise ApiError("컨테이너 준비 시간 초과")
 
 
@@ -101,8 +105,11 @@ def create(uid, **p):
 
 def publish_chain(uid, body, images, threads):
     imgs = [u for u in images if str(u).startswith("https://")][:20]
+    vids = [u for u in imgs if is_video_url(u)]
     if not imgs:
         cid = create(uid, media_type="TEXT", text=body)
+    elif vids:   # 영상 게시(2026-11-26): 영상 한 편만, 처리 완료까지 최대 약 5분 기다린다
+        cid = create(uid, media_type="VIDEO", text=body, video_url=vids[0])
     elif len(imgs) == 1:
         cid = create(uid, media_type="IMAGE", text=body, image_url=imgs[0])
     else:
@@ -110,7 +117,10 @@ def publish_chain(uid, body, images, threads):
         for k in kids:
             wait_ready(k)
         cid = create(uid, media_type="CAROUSEL", text=body, children=",".join(kids))
-    wait_ready(cid)
+    if vids:
+        wait_ready(cid, tries=100, delay=3)
+    else:
+        wait_ready(cid)
     root = call("POST", f"{uid}/threads_publish", creation_id=cid)["id"]
     prev, replies = root, []
     for t in threads:
