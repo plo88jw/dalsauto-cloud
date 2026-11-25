@@ -168,7 +168,7 @@ def run(now=None):
         if p.get("published") and str(p["id"]) not in state["posts"]:
             pb = p["published"]
             state["posts"][str(p["id"])] = {"status": "published", **{k: v for k, v in pb.items() if v}}
-    th, window = int(rules.get("viral_threshold", 1000)), int(rules.get("viral_window_hours", 48))
+    th, window = int(rules.get("link_views", 200)), int(rules.get("viral_window_hours", 48))   # 링크는 조회 link_views 넘으면 댓글로
     log = []
     uid = call("GET", "me", fields="id")["id"]
 
@@ -229,7 +229,7 @@ def run(now=None):
             st["early_views"] = st["views"]
         p = qmap.get(pid, {})
         if (p.get("link_mode") == "on_viral" and p.get("link_thread") and not st.get("link_posted_at")
-                and age <= window and st["views"] >= th and st.get("early_views", th) >= 100):
+                and age <= window and st["views"] >= th and st.get("early_views", th) >= max(10, th // 10)):
             try:
                 target = (st.get("reply_ids") or [st["threads_id"]])[-1]
                 st["link_reply_id"] = reply(uid, p["link_thread"], target)
