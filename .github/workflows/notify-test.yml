@@ -1,0 +1,22 @@
+name: dalsauto-notify-test
+on:
+  workflow_dispatch:   # 발행과 무관한 알림 시험(수동 실행 전용 — publish는 건드리지 않는다)
+permissions:
+  issues: write
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4 (publish.yml과 같은 커밋 고정)
+        with:
+          ref: main
+      - name: 알림 시험
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          echo "@${OWNER}" > notify.txt
+          echo "알림 시험입니다. 휴대폰에 이 푸시가 오면 클라우드 알림이 정상입니다." >> notify.txt
+          bash notify.sh notify.txt
