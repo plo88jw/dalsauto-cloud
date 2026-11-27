@@ -225,6 +225,44 @@ def ab_messages(state, qmap, owner=""):
     return ([f"@{owner}" if owner else ""] + msgs) if msgs else []
 
 
+STATUS = ROOT / "status.md"   # 비민감 집계(숫자만) — 공개 저장소에 커밋되어 클라우드 예약 작업(카톡 보고)이 읽는다
+
+
+def write_status(state, queue, qmap, now):
+    """status.md: 맨 위에 카톡용 한 줄(200자 이내), 아래에 시험 글 표. 예약 글 본문·제목은 절대 쓰지 않는다(큐는 암호화돼 있음)."""
+    import statistics as sts
+    posts = state.get("posts", {})
+    day = [(pid, st) for pid, st in posts.items() if pid in qmap and st.get("status") == "published"
+           and st.get("published_at") and hours(st["published_at"], now) <= 24]
+    views = sum(st.get("views") or 0 for _, st in day)
+    left = sum(1 for p in queue["posts"] if not p.get("published")
+               and posts.get(str(p["id"]), {}).get("status") not in ("published", "failed"))
+    failed = sum(1 for pid, st in posts.items() if pid in qmap and st.get("status") == "failed")
+    ratios = {"first": [], "late": []}
+    rows = []
+    for pid, st in posts.items():
+        ab = (qmap.get(pid) or {}).get("ab")
+        if ab not in ratios or st.get("status") != "published":
+            continue
+        r = st.get("ab_reply")
+        ratio = None
+        if r and st.get("views"):
+            ratio = 100 * r["views"] / st["views"]
+            ratios[ab].append(ratio)
+        rows.append((pid, ab, st.get("views"), r["views"] if r else None, ratio))
+    cap = int(queue.get("rules", {}).get("ab_link_first_cap", 8) or 0)
+    med = lambda xs: f"{sts.median(xs):.1f}%" if xs else "-"   # noqa: E731
+    local = now.astimezone(timezone(timedelta(hours=9)))
+    line = (f"[달스오토 {local:%m/%d} 클라우드 보고] 24h 발행 {len(day)}·조회 {views:,} · 예약 {left} · "
+            f"시험 첫댓글링크 {len(ratios['first'])}/{cap}편 노출 {med(ratios['first'])} vs 기존 {med(ratios['late'])}")
+    if failed:
+        line += f" · ⚠실패 {failed}"
+    out = ["# 달스오토 클라우드 상태 (자동 생성, 숫자만)", "", "카톡용 한 줄:", line[:200], "",
+           f"갱신 {iso(now)} UTC", "", "| 글 | 변형 | 본문 조회 | 링크 댓글 조회 | 노출 비율 |", "|---|---|---|---|---|"]
+    out += [f"| #{pid} | {ab} | {v} | {rv} | {'' if ratio is None else f'{ratio:.1f}%'} |" for pid, ab, v, rv, ratio in rows]
+    STATUS.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
 def run(now=None):
     now = now or datetime.now(UTC)
     queue = load_json(QUEUE, {"posts": [], "rules": {}})
@@ -314,6 +352,11 @@ def run(now=None):
         fresh = not NOTIFY.exists()
         with NOTIFY.open("a", encoding="utf-8") as f:
             f.write("\n".join(x for x in (notes if fresh else notes[1:]) if x) + "\n")
+
+    try:
+        write_status(state, queue, qmap, now)
+    except Exception as e:   # 집계 파일 문제로 발행이 멈추면 안 된다
+        log.append(f"상태 요약 실패: {str(e)[:80]}")
 
     state["updated_at"] = iso(now)
     state.setdefault("log", []).extend(f"{iso(now)} {x}" for x in log)
