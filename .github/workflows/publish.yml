@@ -5,6 +5,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
+  issues: write   # 알림(휴대폰 앱 푸시)용 이슈 댓글
 concurrency:
   group: dalsauto-publish
   cancel-in-progress: false
@@ -24,6 +25,7 @@ jobs:
       - name: 발행·측정
         env:
           DALSAUTO_THREADS_TOKEN: ${{ secrets.DALSAUTO_THREADS_TOKEN }}
+          NOTIFY_MENTION: ${{ github.repository_owner }}
         run: python publish.py
       - name: 결과 저장
         run: |
@@ -33,3 +35,11 @@ jobs:
           git diff --cached --quiet || git commit -m "state $(date -u +%Y-%m-%dT%H:%MZ)"
           git pull --rebase --autostash || true
           git push || true
+      - name: 알림(휴대폰 앱 푸시)
+        if: ${{ hashFiles('notify.txt') != '' }}
+        continue-on-error: true   # 알림이 실패해도 발행·상태 저장에는 영향 없음(이 단계는 맨 마지막)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+        run: bash notify.sh notify.txt
