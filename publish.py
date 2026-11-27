@@ -169,6 +169,62 @@ def find_recent_same(uid, body, now):
     return None
 
 
+NOTIFY = ROOT / "notify.txt"   # 이 파일이 있으면 워크플로우가 GitHub 이슈 댓글(=휴대폰 앱 푸시)로 올린다(커밋하지 않음)
+
+
+def ab_measure(st, ab, now):
+    """첫 댓글 링크 시험(2026-11-28): 링크가 든 댓글의 조회수를 잰다. first=첫 댓글, late=조회 200 뒤에 단 링크 댓글.
+    기준 시각(first=발행, late=링크 게시)부터 3시간 뒤 1회, 24시간 뒤 1회 갱신."""
+    if ab == "first":
+        rid = (st.get("reply_ids") or [None])[0]
+        base = st.get("published_at")
+    else:
+        rid = st.get("link_reply_id")
+        base = st.get("link_posted_at")
+    if not rid or not base:
+        return
+    age, r = hours(base, now), st.get("ab_reply")
+    if (r is None and age >= 3) or (r and r.get("stage") == 1 and age >= 24):
+        st["ab_reply"] = {"views": insights(rid).get("views") or 0, "at": iso(now), "stage": 2 if r else 1}
+
+
+def ab_messages(state, qmap, owner=""):
+    """새 사건만 알림 문구로(state['notified']로 중복 방지): 시험 글 발행·중간 결과·판정 가능·발행 실패.
+    큐에 있는 글만 본다(옛 실패 글이 뒤늦게 알림으로 오지 않게). 공개 저장소 이슈로 올라가므로 조회 수치만 쓰고 쿠팡 클릭 등은 쓰지 않는다."""
+    done = state.setdefault("notified", [])
+    msgs = []
+
+    def once(key, text):
+        if key not in done:
+            done.append(key)
+            msgs.append(text)
+
+    firsts, lates = [], []
+    for pid, st in state["posts"].items():
+        if pid not in qmap:
+            continue
+        p = qmap[pid]
+        if st.get("status") == "failed":
+            once(f"fail:{pid}", f"❌ 발행 실패 #{pid}: {str(st.get('error', ''))[:80]}")
+        ab = p.get("ab")
+        if st.get("status") != "published" or ab not in ("first", "late"):
+            continue
+        if ab == "first":
+            once(f"pub:{pid}", f"시험 글 발행 #{pid} (링크를 첫 댓글에)")
+        r = st.get("ab_reply")
+        if r and st.get("views"):
+            ratio = 100 * r["views"] / st["views"]
+            (firsts if ab == "first" else lates).append((st["views"], ratio))
+            once(f"m:{pid}", f"시험 중간 #{pid}({'첫 댓글 링크' if ab == 'first' else '기존 방식'}) "
+                             f"본문 조회 {st['views']} · 링크 노출 {r['views']} ({ratio:.1f}%)")
+    if len(firsts) >= 6:
+        import statistics as sts
+        once("verdict6", f"📊 시험 판정 가능: 첫 댓글 링크 {len(firsts)}편 노출 중앙값 {sts.median(x[1] for x in firsts):.1f}% "
+                         f"(본문 조회 중앙값 {sts.median(x[0] for x in firsts):.0f}) vs 기존 {len(lates)}편 "
+                         f"{(sts.median(x[1] for x in lates) if lates else 0):.1f}%")
+    return ([f"@{owner}" if owner else ""] + msgs) if msgs else []
+
+
 def run(now=None):
     now = now or datetime.now(UTC)
     queue = load_json(QUEUE, {"posts": [], "rules": {}})
@@ -247,6 +303,17 @@ def run(now=None):
                 log.append(f"링크 타래 #{pid} (조회 {st['views']})")
             except ApiError as e:
                 log.append(f"링크 실패 #{pid}: {e}")
+        if p.get("ab") in ("first", "late"):
+            try:
+                ab_measure(st, p["ab"], now)
+            except ApiError as e:
+                log.append(f"시험 측정 실패 #{pid}: {e}")
+
+    notes = ab_messages(state, qmap, os.environ.get("NOTIFY_MENTION", ""))
+    if notes:   # 한 번의 워크플로우 안에서 run()이 여러 번 돌 수 있어 이어 쓴다(멘션 줄은 처음 한 번만)
+        fresh = not NOTIFY.exists()
+        with NOTIFY.open("a", encoding="utf-8") as f:
+            f.write("\n".join(x for x in (notes if fresh else notes[1:]) if x) + "\n")
 
     state["updated_at"] = iso(now)
     state.setdefault("log", []).extend(f"{iso(now)} {x}" for x in log)
